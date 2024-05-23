@@ -1,0 +1,10 @@
+[package]
+name = "PrecisionTest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = "0.13"
+dolly = "0.5"
+itertools = "0.13"
+
