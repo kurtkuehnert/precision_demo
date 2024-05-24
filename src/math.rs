@@ -3,6 +3,7 @@ use bevy::math::{DMat3, DVec2, DVec3, IVec2, Vec2, Vec3};
 /// The square of the parameter c of the algebraic sigmoid function, used to convert between uv and st coordinates.
 const C_SQR: f64 = 0.87 * 0.87;
 
+/// One matrix per side, which shuffles the a, b, and c component to their corresponding position.
 const SIDE_MATRICES: [DMat3; 6] = [
     DMat3::from_cols_array(&[-1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0]),
     DMat3::from_cols_array(&[0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, -1.0, 0.0]),
@@ -78,8 +79,9 @@ impl Coordinate {
         Self { side, st }
     }
 
-    pub(crate) fn from_local_position(world_position: DVec3) -> Self {
-        let normal = world_position.normalize();
+    /// Calculates the coordinate for for the local position on the unit cube sphere.
+    pub(crate) fn from_local_position(local_position: DVec3) -> Self {
+        let normal = local_position.normalize();
         let abs_normal = normal.abs();
 
         let (side, uv) = if abs_normal.x > abs_normal.y && abs_normal.x > abs_normal.z {
@@ -161,6 +163,7 @@ impl Tile {
         }
     }
 
+    // Calculates the number of tiles per side for a certain lod.
     pub(crate) fn tile_count(lod: i32) -> i32 {
         1 << lod
     }
@@ -168,13 +171,16 @@ impl Tile {
 
 /// Parameters of the camera used to compute the position of a location on the sphere's surface relative to the camera.
 /// This can be calculated directly using f64 operations, or approximated using a Taylor series and f32 operations.
+///
+/// The idea behind the approximation, is to map from st coordinates relative to the camera, to world positions relative to the camera.
+/// Therefore, we identify a origin tile with sufficiently high lod (origin LOD), that serves as a reference, to which we can compute our relative coordinate using partly integer math.
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct SideParameter {
     /// The tile index of the origin tile projected to this side.
     pub(crate) origin_xy: IVec2,
     /// The st coordinate of the origin tile projected to this side.
     pub(crate) origin_st: DVec2,
-    /// The offset between the camera st coordinate and the origin st coordinate in relative st space.
+    /// The offset between the camera st coordinate and the origin st coordinate.
     /// This can be used to translate from st coordinates relative to the origin tile to st coordinates relative to the camera coordinate in the shader.
     pub(crate) delta_relative_st: Vec2,
     /// The constant coefficient of the series.
@@ -198,17 +204,20 @@ pub(crate) struct SideParameter {
 pub(crate) struct CameraParameter {
     /// The world position of the camera.
     pub(crate) position: DVec3,
+    /// The coordinate vertically under the camera.
+    /// Not to be confused with the origin position, which is the camera coordinate aligned to the tile grid.
     pub(crate) coordinate: Coordinate,
-    /// The LOD, at which we swap to the relative position approximation.
-    /// The tile under the camera (with the THRESHOLD_LOD) is the origin for the Taylor series.
+    /// The reference tile, which is used to accurately determine the relative st coordinate in the shader.
+    /// The tile under the camera (with the origin lod) is the origin for the Taylor series.
     pub(crate) origin_lod: i32,
+    /// The position and the radius of the terrain.
     pub(crate) earth: Earth,
     /// The parameters of the six cube sphere faces.
     pub(crate) sides: [SideParameter; 6],
 }
 
 impl CameraParameter {
-    /// Computes the camera parameters based on the camera position.
+    /// Computes the camera parameters based on the it's world position.
     pub(crate) fn compute(
         camera_position: DVec3,
         earth: Earth,
@@ -240,6 +249,9 @@ impl CameraParameter {
             let camera_coordinate = camera_coordinate.project_to_side(side as u32);
             let origin_st = origin_coordinate.st;
             let origin_xy = (origin_coordinate.st * Tile::tile_count(origin_lod) as f64).as_ivec2();
+            // The difference between the origin and the camera coordinate.
+            // This is added to the coordinate relative to the origin tile, in order to get the coordinate relative to the camera coordinate.
+            // The later serves as the input to this Taylor series.
             let delta_relative_st = (origin_coordinate.st - camera_coordinate.st).as_vec2();
 
             let r = earth.radius;
@@ -368,9 +380,12 @@ impl CameraParameter {
     }
 }
 
+/// The parameters of the spherical terrain.
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct Earth {
+    /// The world position of the center of the terrain.
     pub(crate) position: DVec3,
+    /// The radius of the terrain.
     pub(crate) radius: f64,
 }
 
