@@ -2,9 +2,6 @@ use bevy::math::{DMat3, DVec2, DVec3, IVec2, Vec2, Vec3};
 
 /// The square of the parameter c of the algebraic sigmoid function, used to convert between uv and st coordinates.
 const C_SQR: f64 = 0.87 * 0.87;
-/// The LOD, at which we swap to the relative position approximation.
-/// The tile under the camera (with the THRESHOLD_LOD) is the origin for the Taylor series.
-pub(crate) const THRESHOLD_LOD: i32 = 8;
 
 const SIDE_MATRICES: [DMat3; 6] = [
     DMat3::from_cols_array(&[-1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0]),
@@ -18,7 +15,7 @@ const SIDE_MATRICES: [DMat3; 6] = [
 /// Converts uv coordinates in range [-1,1] to st coordinates in range [0,1].
 /// The uv coordinates are spaced equally on the surface of the cube and
 /// the st coordinates are spaced equally on the surface of the sphere.
-pub(crate) fn cube_to_sphere(uv: DVec2) -> DVec2 {
+fn cube_to_sphere(uv: DVec2) -> DVec2 {
     let w = uv * ((1.0 + C_SQR) / (1.0 + C_SQR * uv * uv)).powf(0.5);
     0.5 * w + 0.5
 }
@@ -26,23 +23,9 @@ pub(crate) fn cube_to_sphere(uv: DVec2) -> DVec2 {
 /// Converts st coordinates in range [0,1] to uv coordinates in range [-1,1].
 /// The uv coordinates are spaced equally on the surface of the cube and
 /// the st coordinates are spaced equally on the surface of the sphere.
-pub(crate) fn sphere_to_cube(st: DVec2) -> DVec2 {
+fn sphere_to_cube(st: DVec2) -> DVec2 {
     let w = (st - 0.5) / 0.5;
     w / (1.0 + C_SQR - C_SQR * w * w).powf(0.5)
-}
-
-/// Calculates the unit sphere position based on a side index and a cube uv coordinate.
-pub(crate) fn world_position(side: u32, uv: DVec2) -> DVec3 {
-    match side {
-        0 => DVec3::new(-1.0, -uv.y, uv.x),
-        1 => DVec3::new(uv.x, -uv.y, 1.0),
-        2 => DVec3::new(uv.x, 1.0, uv.y),
-        3 => DVec3::new(1.0, -uv.x, uv.y),
-        4 => DVec3::new(uv.y, -uv.x, -1.0),
-        5 => DVec3::new(uv.y, -1.0, uv.x),
-        _ => unreachable!(),
-    }
-    .normalize()
 }
 
 #[derive(Clone, Copy)]
@@ -91,7 +74,11 @@ pub(crate) struct Coordinate {
 }
 
 impl Coordinate {
-    pub(crate) fn from_world_position(world_position: DVec3) -> Self {
+    pub(crate) fn new(side: u32, st: DVec2) -> Self {
+        Self { side, st }
+    }
+
+    pub(crate) fn from_local_position(world_position: DVec3) -> Self {
         let normal = world_position.normalize();
         let abs_normal = normal.abs();
 
@@ -120,9 +107,25 @@ impl Coordinate {
         Self { side, st }
     }
 
+    /// Calculates the local unit sphere position of this coordinate.
+    pub(crate) fn to_local_position(self) -> DVec3 {
+        let uv = sphere_to_cube(self.st);
+
+        match self.side {
+            0 => DVec3::new(-1.0, -uv.y, uv.x),
+            1 => DVec3::new(uv.x, -uv.y, 1.0),
+            2 => DVec3::new(uv.x, 1.0, uv.y),
+            3 => DVec3::new(1.0, -uv.x, uv.y),
+            4 => DVec3::new(uv.y, -uv.x, -1.0),
+            5 => DVec3::new(uv.y, -1.0, uv.x),
+            _ => unreachable!(),
+        }
+        .normalize()
+    }
+
     /// Projects the coordinate onto one of the six cube faces.
     /// Thereby it chooses the closest location on this face to the original coordinate.
-    pub(crate) fn project_to_side(self, side: u32) -> Self {
+    fn project_to_side(self, side: u32) -> Self {
         let info = SideInfo::project_to_side(self.side, side);
 
         let st = info
@@ -156,15 +159,6 @@ impl Tile {
             lod,
             side,
         }
-    }
-
-    /// Computes the camera origin tile based on the camera's coordinate.
-    /// This is a tile with the threshold lod that is closest to the camera.
-    fn origin_coordinate(coordinate: Coordinate) -> Coordinate {
-        let st = (coordinate.st * Self::tile_count(THRESHOLD_LOD) as f64).round()
-            / Tile::tile_count(THRESHOLD_LOD) as f64;
-
-        Coordinate { st, ..coordinate }
     }
 
     pub(crate) fn tile_count(lod: i32) -> i32 {
@@ -203,18 +197,29 @@ pub(crate) struct SideParameter {
 #[derive(Clone, Debug)]
 pub(crate) struct CameraParameter {
     /// The world position of the camera.
-    pub(crate) world_position: DVec3,
+    pub(crate) position: DVec3,
+    pub(crate) coordinate: Coordinate,
+    /// The LOD, at which we swap to the relative position approximation.
+    /// The tile under the camera (with the THRESHOLD_LOD) is the origin for the Taylor series.
+    pub(crate) origin_lod: i32,
+    pub(crate) earth: Earth,
     /// The parameters of the six cube sphere faces.
     pub(crate) sides: [SideParameter; 6],
 }
 
 impl CameraParameter {
     /// Computes the camera parameters based on the camera position.
-    pub(crate) fn compute(world_position: DVec3) -> CameraParameter {
+    pub(crate) fn compute(
+        camera_position: DVec3,
+        earth: Earth,
+        origin_lod: i32,
+    ) -> CameraParameter {
+        let local_position = earth.world_to_local(camera_position);
+
         // Coordinate of the location vertically below the camera.
-        let camera_coordinate = Coordinate::from_world_position(world_position);
+        let camera_coordinate = Coordinate::from_local_position(local_position);
         // Coordinate of the tile closest to the camera coordinate.
-        let origin_coordinate = Tile::origin_coordinate(camera_coordinate);
+        let origin_coordinate = Self::origin_coordinate(camera_coordinate, origin_lod);
 
         // We want to approximate the position relative to the camera using a second order Taylor series.
         // For that, we have to calculate the Taylor coefficients for each cube side separately.
@@ -234,10 +239,10 @@ impl CameraParameter {
             let origin_coordinate = origin_coordinate.project_to_side(side as u32);
             let camera_coordinate = camera_coordinate.project_to_side(side as u32);
             let origin_st = origin_coordinate.st;
-            let origin_xy =
-                (origin_coordinate.st * Tile::tile_count(THRESHOLD_LOD) as f64).as_ivec2();
+            let origin_xy = (origin_coordinate.st * Tile::tile_count(origin_lod) as f64).as_ivec2();
             let delta_relative_st = (origin_coordinate.st - camera_coordinate.st).as_vec2();
 
+            let r = earth.radius;
             let DVec2 { x: s, y: t } = camera_coordinate.st;
 
             let u_denom = (1.0 - 4.0 * C_SQR * s * (s - 1.0)).sqrt();
@@ -278,18 +283,18 @@ impl CameraParameter {
             let c_dst = 2.0 * v * l_ds * l_dt - l * (v_dt * l_ds + v * l_dst);
             let c_dtt = 2.0 * v * l_dt * l_dt - l * (2.0 * v_dt * l_dt + v * l_dtt) + v_dtt * l * l;
 
-            let p = side_matrix * DVec3::new(a, b, c) / l;
-            let p_ds = side_matrix * DVec3::new(a_ds, b_ds, c_ds) / l.powi(2);
-            let p_dt = side_matrix * DVec3::new(a_dt, b_dt, c_dt) / l.powi(2);
-            let p_dss = side_matrix * DVec3::new(a_dss, b_dss, c_dss) / l.powi(3);
-            let p_dst = side_matrix * DVec3::new(a_dst, b_dst, c_dst) / l.powi(3);
-            let p_dtt = side_matrix * DVec3::new(a_dtt, b_dtt, c_dtt) / l.powi(3);
+            let p = r * side_matrix * DVec3::new(a, b, c) / l;
+            let p_ds = r * side_matrix * DVec3::new(a_ds, b_ds, c_ds) / l.powi(2);
+            let p_dt = r * side_matrix * DVec3::new(a_dt, b_dt, c_dt) / l.powi(2);
+            let p_dss = r * side_matrix * DVec3::new(a_dss, b_dss, c_dss) / l.powi(3);
+            let p_dst = r * side_matrix * DVec3::new(a_dst, b_dst, c_dst) / l.powi(3);
+            let p_dtt = r * side_matrix * DVec3::new(a_dtt, b_dtt, c_dtt) / l.powi(3);
 
             sides[side] = SideParameter {
                 origin_xy,
                 origin_st,
                 delta_relative_st,
-                c: (p - world_position).as_vec3(),
+                c: (p + earth.position - camera_position).as_vec3(),
                 c_s: p_ds.as_vec3(),
                 c_t: p_dt.as_vec3(),
                 c_ss: (p_dss / 2.0).as_vec3(),
@@ -299,9 +304,21 @@ impl CameraParameter {
         }
 
         CameraParameter {
-            world_position,
+            earth,
+            origin_lod,
+            coordinate: camera_coordinate,
+            position: camera_position,
             sides,
         }
+    }
+
+    /// Computes the camera origin tile based on the camera's coordinate.
+    /// This is a tile with the threshold lod that is closest to the camera.
+    fn origin_coordinate(coordinate: Coordinate, origin_lod: i32) -> Coordinate {
+        let tile_count = Tile::tile_count(origin_lod) as f64;
+        let st = (coordinate.st * tile_count).round() / tile_count;
+
+        Coordinate { st, ..coordinate }
     }
 
     /// Computes the relative st coordinate of a vertex inside the tile.
@@ -311,22 +328,22 @@ impl CameraParameter {
         (tile.xy.as_dvec2() + vertex_offset.as_dvec2()
             - self.sides[tile.side as usize].origin_st * Tile::tile_count(tile.lod) as f64)
             .as_vec2()
-            / (1 << THRESHOLD_LOD) as f32
+            / (1 << self.origin_lod) as f32
     }
 
     /// Based on the relative st coordinate, calculates the relative position of the location to the camera.
     pub(crate) fn relative_position(&self, relative_st: Vec2, side: u32) -> DVec3 {
         let st = self.sides[side as usize].origin_st + relative_st.as_dvec2();
-        let uv = sphere_to_cube(st);
+        let local_position = Coordinate::new(side, st).to_local_position();
 
-        world_position(side, uv) - self.world_position
+        self.earth.local_to_world(local_position) - self.position
     }
 
     /// Approximates the relative st coordinate of a vertex inside the tile.
     /// By computing the tile offset between this tile and the origin tile with integer math,
     /// high precision relative st can be guaranteed even for high LODs.
     pub(crate) fn approximate_relative_st(&self, tile: Tile, vertex_offset: Vec2) -> Vec2 {
-        let lod_difference = tile.lod - THRESHOLD_LOD;
+        let lod_difference = tile.lod - self.origin_lod;
         let tile_offset = tile.xy - self.sides[tile.side as usize].origin_xy << lod_difference;
 
         (tile_offset.as_vec2() + vertex_offset) / (1 << tile.lod) as f32
@@ -348,5 +365,21 @@ impl CameraParameter {
         let Vec2 { x: s, y: t } = relative_st + delta_relative_st;
 
         c + c_s * s + c_t * t + c_ss * s * s + c_st * s * t + c_tt * t * t
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct Earth {
+    pub(crate) position: DVec3,
+    pub(crate) radius: f64,
+}
+
+impl Earth {
+    pub(crate) fn local_to_world(&self, local_position: DVec3) -> DVec3 {
+        self.position + local_position * self.radius
+    }
+
+    pub(crate) fn world_to_local(&self, world_position: DVec3) -> DVec3 {
+        (world_position - self.position) / self.radius
     }
 }

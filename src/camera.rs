@@ -58,7 +58,7 @@ impl Default for DebugCamera {
 }
 
 impl DebugCamera {
-    pub fn new(position: Vec3, yaw_degrees: f32, pitch_degrees: f32) -> Self {
+    pub fn new(position: Vec3, yaw_degrees: f32, pitch_degrees: f32, speed: f32) -> Self {
         Self {
             camera: default(),
             rig: DebugRig {
@@ -71,7 +71,7 @@ impl DebugCamera {
                     .with(Smooth::new_position_rotation(3.0, 1.5))
                     .build(),
                 active: false,
-                translation_speed: 100.0,
+                translation_speed: speed,
                 rotation_speed: 8.0,
                 acceleration: 1.03,
             },
