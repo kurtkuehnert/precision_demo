@@ -1,14 +1,16 @@
 #![allow(dead_code, unused_variables)]
 
-use bevy::{math::DVec2, prelude::*};
-use bevy::math::DVec3;
+use bevy::{
+    math::{DVec2, DVec3},
+    prelude::*,
+};
 use itertools::{iproduct, Itertools};
 
 use crate::{
     camera::{DebugCamera, DebugPlugin, DebugRig},
-    math::{CameraApproximationParams, SCALE, sphere_to_cube, Tile, world_position},
+    math::{CameraParameter, Coordinate, SideParameter, sphere_to_cube, Tile, world_position},
 };
-use crate::math::{CameraParams, SideCoefficients, THRESHOLD_LOD};
+use crate::math::THRESHOLD_LOD;
 
 mod camera;
 mod math;
@@ -46,12 +48,13 @@ fn draw_sphere(gizmos: &mut Gizmos, lod: i32) {
     }
 }
 
-fn draw_threshold_area(gizmos: &mut Gizmos, camera_approximation: &CameraApproximationParams) {
+fn draw_origin(gizmos: &mut Gizmos, camera: &CameraParameter) {
     for (
         side,
-        &SideCoefficients {
-            delta_relative_st,
+        &SideParameter {
             origin_xy,
+            origin_st,
+            delta_relative_st,
             c,
             c_s,
             c_t,
@@ -59,11 +62,11 @@ fn draw_threshold_area(gizmos: &mut Gizmos, camera_approximation: &CameraApproxi
             c_st,
             c_tt,
         },
-    ) in camera_approximation.sides.iter().enumerate()
+    ) in camera.sides.iter().enumerate()
     {
-        let origin_st = origin_xy.as_dvec2() / Tile::tile_count(THRESHOLD_LOD) as f64;
-        let uv = sphere_to_cube(origin_st);
-        let origin_position = world_position(side as u32, uv);
+        let origin_position = world_position(side as u32, sphere_to_cube(origin_st));
+
+        let scale = 0.01;
 
         gizmos.sphere(
             origin_position.as_vec3(),
@@ -73,34 +76,35 @@ fn draw_threshold_area(gizmos: &mut Gizmos, camera_approximation: &CameraApproxi
         );
         gizmos.arrow(
             origin_position.as_vec3(),
-            origin_position.as_vec3() + c_s,
+            origin_position.as_vec3() + c_s * scale,
             Color::YELLOW,
         );
         gizmos.arrow(
             origin_position.as_vec3(),
-            origin_position.as_vec3() + c_t,
+            origin_position.as_vec3() + c_t * scale,
             Color::GREEN,
         );
         gizmos.arrow(
             origin_position.as_vec3(),
-            origin_position.as_vec3() + c_ss,
+            origin_position.as_vec3() + c_ss * scale,
             Color::RED,
         );
         gizmos.arrow(
             origin_position.as_vec3(),
-            origin_position.as_vec3() + c_st,
+            origin_position.as_vec3() + c_st * scale,
             Color::BLUE,
         );
         gizmos.arrow(
             origin_position.as_vec3(),
-            origin_position.as_vec3() + c_tt,
+            origin_position.as_vec3() + c_tt * scale,
             Color::VIOLET,
         );
 
         for (start, end) in [(0, 0), (0, 1), (1, 1), (1, 0), (0, 0)]
             .into_iter()
             .map(|(x, y)| {
-                let corner_st = (origin_st + IVec2::new(x * 2 - 1, y * 2 - 1).as_dvec2() * SCALE)
+                let corner_st = (origin_st
+                    + IVec2::new(x * 2 - 1, y * 2 - 1).as_dvec2() * scale as f64)
                     .clamp(DVec2::splat(0.0), DVec2::splat(1.0));
                 world_position(side as u32, sphere_to_cube(corner_st))
             })
@@ -111,46 +115,64 @@ fn draw_threshold_area(gizmos: &mut Gizmos, camera_approximation: &CameraApproxi
     }
 }
 
+fn draw_error_field(gizmos: &mut Gizmos, camera: &CameraParameter) {
+    let scale = (1 << 4) as f32;
+    let count = 16;
+    let side = Coordinate::from_world_position(camera.world_position).side;
+    let error_scale = 4.0;
+
+    for (x, y) in iproduct!(-count..=count, -count..=count) {
+        let relative_st = Vec2::new(x as f32, y as f32) / count as f32 / scale;
+
+        let position = camera.world_position + camera.relative_position(relative_st, side);
+        let approximate_position = camera.world_position
+            + camera
+                .approximate_relative_position(relative_st, side)
+                .as_dvec3();
+
+        let error = approximate_position - position;
+
+        gizmos.arrow(
+            position.as_vec3(),
+            position.as_vec3() + error.as_vec3() * error_scale,
+            Color::RED,
+        );
+    }
+}
+
 fn update(
-    mut cached_position: Local<DVec3>,
+    mut camera_position: Local<DVec3>,
     mut freeze: Local<bool>,
     mut gizmos: Gizmos,
     camera_query: Query<&Transform, With<DebugRig>>,
     input: Res<ButtonInput<KeyCode>>,
 ) {
-    let camera_transform = camera_query.single();
-    let camera_position = camera_transform.translation.as_dvec3();
-
     if input.just_pressed(KeyCode::KeyF) {
         *freeze = !*freeze;
     }
 
-    let camera_position = if *freeze {
-        *cached_position
-    } else {
-        *cached_position = camera_position;
-        camera_position
-    };
+    if !*freeze {
+        *camera_position = camera_query.single().translation.as_dvec3();
+    }
 
-    let camera = CameraParams::new(camera_position);
-    let camera_approximation = CameraApproximationParams::compute(camera_position);
-
-    let tile = Tile::new(0, THRESHOLD_LOD, 23, 12);
-    let vertex_offset = Vec2::new(0.3754, 0.815768);
+    let camera = CameraParameter::compute(*camera_position);
 
     draw_sphere(&mut gizmos, 2);
-    draw_threshold_area(&mut gizmos, &camera_approximation);
+    draw_origin(&mut gizmos, &camera);
+    draw_error_field(&mut gizmos, &camera);
 
     {
+        let tile = Tile::new(0, THRESHOLD_LOD, 23, 12);
+        let vertex_offset = Vec2::new(0.3754, 0.815768);
+
         let relative_st = camera.relative_st(tile, vertex_offset);
         let relative_position = camera.relative_position(relative_st, tile.side);
-
-        let relative_st = camera_approximation.relative_st(tile, vertex_offset);
+        let approximate_relative_st = camera.approximate_relative_st(tile, vertex_offset);
         let approximate_relative_position =
-            camera_approximation.relative_position(relative_st, tile.side);
+            camera.approximate_relative_position(approximate_relative_st, tile.side);
 
-        let position = camera_position + relative_position;
-        let approximate_position = camera_position + approximate_relative_position.as_dvec3();
+        let position = camera.world_position + relative_position;
+        let approximate_position = camera.world_position + approximate_relative_position.as_dvec3();
 
         let error = position - approximate_position;
 
@@ -169,27 +191,4 @@ fn update(
             Color::RED,
         );
     }
-
-    /*    {
-        let count = 20;
-        let side = 0;
-
-        for (x, y) in iproduct!(-count..=count, -count..=count) {
-            let relative_st = Vec2::new(x as f32, y as f32) / count as f32;
-
-            let position = camera_position + camera.relative_position(relative_st, side);
-            let approximate_position = camera_position
-                + camera_approximation
-                    .relative_position(relative_st, side)
-                    .as_dvec3();
-
-            let error = approximate_position - position;
-
-            gizmos.arrow(
-                position.as_vec3(),
-                position.as_vec3() + error.as_vec3() * 1.0,
-                Color::RED,
-            );
-        }
-    }*/
 }
