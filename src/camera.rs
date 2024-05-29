@@ -1,170 +1,147 @@
-use bevy::{input::mouse::MouseMotion, prelude::*};
-use dolly::prelude::*;
+//! This is a modified version of the big_space (https://github.com/aevyrie/big_space) camera controller.
+
+use crate::big_space::{FloatingOrigin, GridCell, GridTransform, RootReferenceFrame};
+use bevy::{
+    input::mouse::MouseMotion,
+    math::{DQuat, DVec3},
+    prelude::*,
+    transform::TransformSystem,
+};
+
+#[derive(Bundle)]
+pub struct DebugCameraBundle {
+    pub camera: Camera3dBundle,
+    pub controller: DebugCameraController,
+    pub cell: GridCell,
+    pub origin: FloatingOrigin,
+}
+
+impl Default for DebugCameraBundle {
+    fn default() -> Self {
+        Self {
+            camera: default(),
+            controller: default(),
+            cell: default(),
+            origin: FloatingOrigin,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Reflect, Component)]
+pub struct DebugCameraController {
+    pub enabled: bool,
+    /// Smoothness of translation, from `0.0` to `1.0`.
+    pub translational_smoothness: f64,
+    /// Smoothness of rotation, from `0.0` to `1.0`.
+    pub rotational_smoothness: f64,
+    pub translation_speed: f64,
+    pub rotation_speed: f64,
+    pub acceleration_speed: f64,
+    translation_velocity: DVec3,
+    rotation_velocity: DQuat,
+}
+
+impl Default for DebugCameraController {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            translational_smoothness: 0.9,
+            rotational_smoothness: 0.8,
+            translation_speed: 10e6,
+            rotation_speed: 1e-1,
+            acceleration_speed: 4.0,
+            translation_velocity: Default::default(),
+            rotation_velocity: Default::default(),
+        }
+    }
+}
 
 pub struct DebugPlugin;
 
 impl Plugin for DebugPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, debug_lighting)
-            .add_systems(Update, (debug_camera_control,));
+        app.add_systems(
+            PostUpdate,
+            camera_controller.before(TransformSystem::TransformPropagate),
+        );
     }
 }
 
-#[derive(Component)]
-pub struct DebugRig {
-    pub rig: CameraRig<RightHanded>,
-    pub active: bool,
-    pub translation_speed: f32,
-    pub rotation_speed: f32,
-    pub acceleration: f32,
-}
-
-/// A fly camera used to navigate and debug the terrain.
-///
-/// It is controlled using the arrow keys, and the mouse.
-#[derive(Bundle)]
-pub struct DebugCamera {
-    pub camera: Camera3dBundle,
-    pub rig: DebugRig,
-}
-
-impl Default for DebugCamera {
-    fn default() -> Self {
-        Self {
-            camera: Camera3dBundle {
-                projection: PerspectiveProjection {
-                    near: 0.001,
-                    ..default()
-                }
-                .into(),
-                ..default()
-            },
-            rig: DebugRig {
-                rig: CameraRig::builder()
-                    .with(Position::new(Vec3::new(-5.0, 0.0, 0.0)))
-                    .with(YawPitch {
-                        yaw_degrees: -90.0,
-                        pitch_degrees: 0.0,
-                    })
-                    .with(Smooth::new_position_rotation(3.0, 1.5))
-                    .build(),
-                active: false,
-                translation_speed: 1.0,
-                rotation_speed: 8.0,
-                acceleration: 1.05,
-            },
-        }
-    }
-}
-
-impl DebugCamera {
-    pub fn new(position: Vec3, yaw_degrees: f32, pitch_degrees: f32, speed: f32) -> Self {
-        Self {
-            camera: default(),
-            rig: DebugRig {
-                rig: CameraRig::builder()
-                    .with(Position::new(position))
-                    .with(YawPitch {
-                        yaw_degrees,
-                        pitch_degrees,
-                    })
-                    .with(Smooth::new_position_rotation(3.0, 1.5))
-                    .build(),
-                active: false,
-                translation_speed: speed,
-                rotation_speed: 8.0,
-                acceleration: 1.03,
-            },
-        }
-    }
-}
-
-pub(crate) fn debug_camera_control(
+pub fn camera_controller(
+    space: Res<RootReferenceFrame>,
     time: Res<Time>,
-    mut motion_events: EventReader<MouseMotion>,
-    input: Res<ButtonInput<KeyCode>>,
-    mut debug_rig_query: Query<(&mut Transform, &mut DebugRig)>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut mouse_move: EventReader<MouseMotion>,
+    mut camera: Query<(GridTransform, &mut DebugCameraController)>,
 ) {
-    let delta_time = time.delta_seconds();
+    let (mut position, mut controller) = camera.single_mut();
 
-    if let Some((_, mut rig)) = debug_rig_query.iter_mut().find(|(_, camera)| camera.active) {
-        let mut speed_factor = 1.0;
-        let mut rotation_delta = Vec2::ZERO;
-        let mut translation_delta = Vec3::ZERO;
+    keyboard
+        .just_pressed(KeyCode::KeyT)
+        .then(|| controller.enabled = !controller.enabled);
 
-        for motion in motion_events.read() {
-            rotation_delta += -motion.delta;
-        }
-
-        if input.pressed(KeyCode::ArrowLeft) {
-            translation_delta.x -= 1.0;
-        }
-        if input.pressed(KeyCode::ArrowRight) {
-            translation_delta.x += 1.0;
-        }
-        if input.pressed(KeyCode::PageUp) {
-            translation_delta.y += 1.0;
-        }
-        if input.pressed(KeyCode::PageDown) {
-            translation_delta.y -= 1.0;
-        }
-        if input.pressed(KeyCode::ArrowUp) {
-            translation_delta.z -= 1.0;
-        }
-        if input.pressed(KeyCode::ArrowDown) {
-            translation_delta.z += 1.0;
-        }
-        if input.pressed(KeyCode::Home) {
-            speed_factor = 1.0 / rig.acceleration;
-        }
-        if input.pressed(KeyCode::End) {
-            speed_factor = rig.acceleration / 1.0;
-        }
-
-        rig.translation_speed *= speed_factor;
-
-        if translation_delta != Vec3::ZERO {
-            translation_delta = translation_delta.normalize();
-        }
-
-        let euler = Quat::from(rig.rig.final_transform.rotation).to_euler(EulerRot::YXZ);
-        translation_delta = Quat::from_euler(EulerRot::YXZ, euler.0, 0.0, 0.0) * translation_delta;
-
-        translation_delta = translation_delta * rig.translation_speed * delta_time;
-        rotation_delta = rotation_delta * rig.rotation_speed * delta_time;
-
-        rig.rig
-            .driver_mut::<YawPitch>()
-            .rotate_yaw_pitch(rotation_delta.x, rotation_delta.y);
-        rig.rig
-            .driver_mut::<Position>()
-            .translate(translation_delta);
-    } else {
-        for _ in motion_events.read() {}
+    if !controller.enabled {
+        return;
     }
 
-    for (mut transform, mut rig) in &mut debug_rig_query {
-        if input.just_pressed(KeyCode::KeyT) {
-            rig.active = !rig.active;
-        }
+    let mut rotation_direction = DVec3::ZERO; // x: pitch, y: yaw, z: roll
+    let mut translation_direction = DVec3::ZERO; // x: left/right, y: up/down, z: forward/backward
+    let mut acceleration = 0.0;
 
-        let (translation, rotation) = rig.rig.update(delta_time).into_position_rotation();
-        transform.translation = translation;
-        transform.rotation = rotation;
+    if let Some(total_mouse_motion) = mouse_move.read().map(|e| e.delta).reduce(|sum, i| sum + i) {
+        rotation_direction.x -= total_mouse_motion.y as f64;
+        rotation_direction.y -= total_mouse_motion.x as f64;
     }
-}
 
-pub(crate) fn debug_lighting(mut commands: Commands) {
-    commands.spawn(DirectionalLightBundle {
-        directional_light: DirectionalLight {
-            illuminance: 5000.0,
-            ..default()
-        },
-        transform: Transform::from_xyz(-1.0, 1.0, -1.0).looking_at(Vec3::ZERO, Vec3::Y),
-        ..default()
-    });
-    commands.insert_resource(AmbientLight {
-        brightness: 100.0,
-        ..default()
-    });
+    keyboard
+        .pressed(KeyCode::ArrowLeft)
+        .then(|| translation_direction.x -= 1.0);
+    keyboard
+        .pressed(KeyCode::ArrowRight)
+        .then(|| translation_direction.x += 1.0);
+    keyboard
+        .pressed(KeyCode::PageUp)
+        .then(|| translation_direction.y += 1.0);
+    keyboard
+        .pressed(KeyCode::PageDown)
+        .then(|| translation_direction.y -= 1.0);
+    keyboard
+        .pressed(KeyCode::ArrowUp)
+        .then(|| translation_direction.z -= 1.0);
+    keyboard
+        .pressed(KeyCode::ArrowDown)
+        .then(|| translation_direction.z += 1.0);
+    keyboard.pressed(KeyCode::Home).then(|| acceleration -= 1.0);
+    keyboard.pressed(KeyCode::End).then(|| acceleration += 1.0);
+
+    let dt = time.delta_seconds_f64();
+    let lerp_translation = 1.0 - controller.translational_smoothness.clamp(0.0, 0.999);
+    let lerp_rotation = 1.0 - controller.rotational_smoothness.clamp(0.0, 0.999);
+    let current_rotation = position.transform.rotation.as_dquat();
+
+    controller.translation_speed *= 1.0 + acceleration * controller.acceleration_speed * dt;
+
+    let translation_velocity_target =
+        current_rotation * translation_direction * controller.translation_speed * dt;
+    let rotation_velocity_target = DQuat::from_euler(
+        EulerRot::XYZ,
+        rotation_direction.x * controller.rotation_speed * dt,
+        rotation_direction.y * controller.rotation_speed * dt,
+        rotation_direction.z * controller.rotation_speed * dt,
+    );
+
+    controller.translation_velocity = controller
+        .translation_velocity
+        .lerp(translation_velocity_target, lerp_translation);
+    controller.rotation_velocity = controller
+        .rotation_velocity
+        .slerp(rotation_velocity_target, lerp_rotation);
+
+    let (cell_delta, translation_delta) =
+        space.translation_to_grid(controller.translation_velocity);
+    let rotation_delta = controller.rotation_velocity.as_quat();
+
+    *position.cell += cell_delta;
+    position.transform.translation += translation_delta;
+    position.transform.rotation *= rotation_delta;
 }
