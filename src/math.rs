@@ -1,4 +1,5 @@
 use bevy::math::{DMat3, DVec2, DVec3, IVec2, Vec2, Vec3};
+use bevy::prelude::Component;
 
 /// The square of the parameter c of the algebraic sigmoid function, used to convert between uv and st coordinates.
 const C_SQR: f64 = 0.87 * 0.87;
@@ -381,7 +382,7 @@ impl CameraParameter {
 }
 
 /// The parameters of the spherical terrain.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Component)]
 pub(crate) struct Earth {
     /// The world position of the center of the terrain.
     pub(crate) position: DVec3,
@@ -390,10 +391,13 @@ pub(crate) struct Earth {
 }
 
 impl Earth {
+    pub fn new(position: DVec3, radius: f64) -> Self {
+        Self { position, radius }
+    }
+
     pub(crate) fn local_to_world(&self, local_position: DVec3) -> DVec3 {
         self.position + local_position * self.radius
     }
-
     pub(crate) fn world_to_local(&self, world_position: DVec3) -> DVec3 {
         (world_position - self.position) / self.radius
     }

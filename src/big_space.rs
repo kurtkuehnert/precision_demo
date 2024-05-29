@@ -1,6 +1,6 @@
 pub use big_space::FloatingOrigin;
 
-pub type GridPrecision = i16;
+pub type GridPrecision = i32;
 
 pub type FloatingOriginPlugin = big_space::FloatingOriginPlugin<GridPrecision>;
 pub type RootReferenceFrame = big_space::reference_frame::RootReferenceFrame<GridPrecision>;

@@ -1,3 +1,4 @@
+use bevy::math::DVec3;
 use bevy::{
     math::{DVec2, IVec2, Quat, Vec2},
     prelude::{Color, Gizmos},
@@ -9,7 +10,13 @@ use crate::math::{CameraParameter, Coordinate, Earth, SideParameter, Tile};
 const DEBUG_SCALE: f32 = 1.0 / (1 << 5) as f32;
 const ERROR_SCALE: f32 = 4.0;
 
-pub(crate) fn draw_tile(gizmos: &mut Gizmos, earth: &Earth, tile: Tile, color: Color) {
+pub(crate) fn draw_tile(
+    gizmos: &mut Gizmos,
+    earth: &Earth,
+    tile: Tile,
+    color: Color,
+    offset: DVec3,
+) {
     let size = 1.0 / Tile::tile_count(tile.lod) as f64;
 
     for (start, end) in [(0, 0), (0, 1), (1, 1), (1, 0), (0, 0)]
@@ -22,21 +29,27 @@ pub(crate) fn draw_tile(gizmos: &mut Gizmos, earth: &Earth, tile: Tile, color: C
         .tuple_windows()
     {
         gizmos.short_arc_3d_between(
-            earth.position.as_vec3(),
-            start.as_vec3(),
-            end.as_vec3(),
+            (earth.position + offset).as_vec3(),
+            (start + offset).as_vec3(),
+            (end + offset).as_vec3(),
             color,
         );
     }
 }
 
-pub(crate) fn draw_earth(gizmos: &mut Gizmos, earth: &Earth, lod: i32) {
+pub(crate) fn draw_earth(gizmos: &mut Gizmos, earth: &Earth, lod: i32, offset: DVec3) {
     for (side, x, y) in iproduct!(0..6, 0..1 << lod, 0..1 << lod) {
-        draw_tile(gizmos, earth, Tile::new(side, lod, x, y), Color::BLACK)
+        draw_tile(
+            gizmos,
+            earth,
+            Tile::new(side, lod, x, y),
+            Color::BLACK,
+            offset,
+        )
     }
 }
 
-pub(crate) fn draw_origin(gizmos: &mut Gizmos, camera: &CameraParameter) {
+pub(crate) fn draw_origin(gizmos: &mut Gizmos, camera: &CameraParameter, offset: DVec3) {
     let earth = camera.earth;
 
     for (
@@ -55,7 +68,7 @@ pub(crate) fn draw_origin(gizmos: &mut Gizmos, camera: &CameraParameter) {
     ) in camera.sides.iter().enumerate()
     {
         let local_position = Coordinate::new(side as u32, origin_st).to_local_position();
-        let origin_position = earth.local_to_world(local_position);
+        let origin_position = earth.local_to_world(local_position) + offset;
 
         // if side as u32 == camera.coordinate.side {
         //     println!(
@@ -113,16 +126,16 @@ pub(crate) fn draw_origin(gizmos: &mut Gizmos, camera: &CameraParameter) {
             .tuple_windows()
         {
             gizmos.short_arc_3d_between(
-                earth.position.as_vec3(),
-                start.as_vec3(),
-                end.as_vec3(),
+                (earth.position + offset).as_vec3(),
+                (start + offset).as_vec3(),
+                (end + offset).as_vec3(),
                 Color::WHITE,
             );
         }
     }
 }
 
-pub(crate) fn draw_error_field(gizmos: &mut Gizmos, camera: &CameraParameter) {
+pub(crate) fn draw_error_field(gizmos: &mut Gizmos, camera: &CameraParameter, offset: DVec3) {
     let count = 16;
     let side = camera.coordinate.side;
 
@@ -138,8 +151,8 @@ pub(crate) fn draw_error_field(gizmos: &mut Gizmos, camera: &CameraParameter) {
         let error = approximate_position - position;
 
         gizmos.arrow(
-            position.as_vec3(),
-            position.as_vec3() + error.as_vec3() * ERROR_SCALE,
+            (position + offset).as_vec3(),
+            (position + offset).as_vec3() + error.as_vec3() * ERROR_SCALE,
             Color::RED,
         );
     }

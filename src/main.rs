@@ -1,10 +1,12 @@
 #![allow(dead_code, unused_variables)]
 
 use bevy::window::Cursor;
-use bevy::{math::DVec3, prelude::*, render::view::NoFrustumCulling};
+use bevy::{math::DVec3, prelude::*};
 
+use crate::camera::DebugCameraController;
+use crate::draw::{draw_earth, draw_error_field, draw_origin, draw_tile};
 use crate::{
-    big_space::{FloatingOriginPlugin, GridCell, GridTransformReadOnly, RootReferenceFrame},
+    big_space::{FloatingOriginPlugin, GridTransformReadOnly, RootReferenceFrame},
     camera::{DebugCameraBundle, DebugPlugin},
     math::{CameraParameter, Earth, Tile},
 };
@@ -14,7 +16,7 @@ mod camera;
 mod draw;
 mod math;
 
-const RADIUS: f64 = 6371000.0;
+const RADIUS: f64 = 1.0; // 6371000.0;
 const ORIGIN_LOD: i32 = 8;
 
 fn main() {
@@ -37,41 +39,45 @@ fn main() {
             DebugPlugin,
         ))
         .add_systems(Startup, setup)
-        // .add_systems(Update, update)
+        .add_systems(Update, update)
         .run();
 }
 
 fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, space: Res<RootReferenceFrame>) {
-    let (cam_cell, cam_pos) = space.imprecise_translation_to_grid(-Vec3::X * RADIUS as f32 * 2.0);
+    let earth = Earth::new(DVec3::new(0.0, 1.0, 1.0), RADIUS);
+    let camera_position = -DVec3::X * RADIUS * 3.0;
+
+    let (earth_cell, earth_translation) = space.translation_to_grid(earth.position);
+    let (camera_cell, camera_translation) = space.translation_to_grid(camera_position);
+
+    commands.spawn((
+        earth,
+        earth_cell,
+        PbrBundle {
+            transform: Transform::from_translation(earth_translation),
+            mesh: meshes.add(Sphere::new(RADIUS as f32 * 0.4).mesh().ico(20).unwrap()),
+            visibility: Visibility::Hidden,
+            ..default()
+        },
+    ));
 
     commands.spawn(DebugCameraBundle {
         camera: Camera3dBundle {
-            transform: Transform::from_translation(cam_pos).looking_to(Vec3::X, Vec3::Y),
+            transform: Transform::from_translation(camera_translation).looking_to(Vec3::X, Vec3::Y),
             projection: PerspectiveProjection {
                 near: 0.001,
-                far: 10000000000.0,
                 ..default()
             }
             .into(),
             ..default()
         },
-        cell: cam_cell,
-        ..default()
-    });
-
-    let earth = Earth {
-        position: DVec3::new(8.0, 0.0, 3.0),
-        radius: RADIUS,
-    };
-
-    commands.spawn((
-        GridCell::ZERO,
-        PbrBundle {
-            mesh: meshes.add(Sphere::new(RADIUS as f32).mesh().ico(20).unwrap()),
+        cell: camera_cell,
+        controller: DebugCameraController {
+            translation_speed: RADIUS,
             ..default()
         },
-        NoFrustumCulling,
-    ));
+        ..default()
+    });
 }
 
 fn update(
@@ -80,9 +86,10 @@ fn update(
     mut show_error: Local<bool>,
     mut hide_origin: Local<bool>,
     mut gizmos: Gizmos,
+    earth_query: Query<(&Earth, GridTransformReadOnly)>,
     camera_query: Query<GridTransformReadOnly, With<Camera>>,
     input: Res<ButtonInput<KeyCode>>,
-    space: Res<RootReferenceFrame>,
+    frame: Res<RootReferenceFrame>,
 ) {
     if input.just_pressed(KeyCode::KeyF) {
         *freeze = !*freeze;
@@ -95,24 +102,25 @@ fn update(
     }
 
     if !*freeze {
-        *camera_position = camera_query.single().position_double(&space);
+        *camera_position = camera_query.single().position_double(&frame);
     }
 
-    let earth = Earth {
-        position: DVec3::ZERO,
-        radius: RADIUS,
-    };
+    let (&earth, earth_grid_transform) = earth_query.single();
+    let earth_position = earth_grid_transform.position_double(&frame);
+    let offset = earth_position - *camera_position;
+
+    dbg!(offset);
 
     let camera = CameraParameter::compute(*camera_position, earth, ORIGIN_LOD);
 
-    // draw_earth(&mut gizmos, &earth, 2);
+    draw_earth(&mut gizmos, &earth, 2, offset);
 
-    // if !*hide_origin {
-    //     draw_origin(&mut gizmos, &camera);
-    // }
-    // if *show_error {
-    //     draw_error_field(&mut gizmos, &camera);
-    // }
+    if !*hide_origin {
+        draw_origin(&mut gizmos, &camera, offset);
+    }
+    if *show_error {
+        draw_error_field(&mut gizmos, &camera, offset);
+    }
 
     {
         let xy = (Vec2::new(0.2483, 0.688143) * (1 << camera.origin_lod) as f32).as_ivec2();
@@ -130,26 +138,26 @@ fn update(
 
         let error = position - approximate_position;
 
-        dbg!(error);
+        // dbg!(error);
 
-        // draw_tile(&mut gizmos, &earth, tile, Color::RED);
-        //
-        // gizmos.sphere(
-        //     position.as_vec3(),
-        //     Quat::IDENTITY,
-        //     0.0001 * earth.radius as f32,
-        //     Color::GREEN,
-        // );
-        // gizmos.sphere(
-        //     approximate_position.as_vec3(),
-        //     Quat::IDENTITY,
-        //     0.0001 * earth.radius as f32,
-        //     Color::RED,
-        // );
-        // gizmos.arrow(
-        //     position.as_vec3(),
-        //     approximate_position.as_vec3(),
-        //     Color::RED,
-        // );
+        draw_tile(&mut gizmos, &earth, tile, Color::RED, offset);
+
+        gizmos.sphere(
+            (position + offset).as_vec3(),
+            Quat::IDENTITY,
+            0.0001 * earth.radius as f32,
+            Color::GREEN,
+        );
+        gizmos.sphere(
+            (approximate_position + offset).as_vec3(),
+            Quat::IDENTITY,
+            0.0001 * earth.radius as f32,
+            Color::RED,
+        );
+        gizmos.arrow(
+            (position + offset).as_vec3(),
+            (approximate_position + offset).as_vec3(),
+            Color::RED,
+        );
     }
 }
