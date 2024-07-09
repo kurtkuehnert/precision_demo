@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bevy = "0.13"
-dolly = "0.5"
+bevy = "0.14"
 itertools = "0.13"
-big_space = "0.6.0"
+big_space = "0.7"
 

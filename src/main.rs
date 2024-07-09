@@ -1,15 +1,17 @@
 #![allow(dead_code, unused_variables)]
 
-use bevy::window::Cursor;
-use bevy::{math::DVec3, prelude::*};
-
+use crate::big_space::{BigSpacePlugin, ReferenceFrame, ReferenceFrames};
 use crate::camera::DebugCameraController;
 use crate::draw::{draw_earth, draw_error_field, draw_origin, draw_tile};
 use crate::{
-    big_space::{FloatingOriginPlugin, GridTransformReadOnly, RootReferenceFrame},
+    big_space::GridTransformReadOnly,
     camera::{DebugCameraBundle, DebugPlugin},
     math::{CameraParameter, Earth, Tile},
 };
+use ::big_space::BigSpaceCommands;
+use bevy::color::palettes::basic;
+use bevy::window::Cursor;
+use bevy::{math::DVec3, prelude::*};
 
 mod big_space;
 mod camera;
@@ -35,7 +37,7 @@ fn main() {
                 })
                 .build()
                 .disable::<TransformPlugin>(),
-            FloatingOriginPlugin::new(10000.0, 100.0),
+            BigSpacePlugin::default(),
             DebugPlugin,
         ))
         .add_systems(Startup, setup)
@@ -43,40 +45,47 @@ fn main() {
         .run();
 }
 
-fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, space: Res<RootReferenceFrame>) {
+fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     let earth = Earth::new(DVec3::new(0.0, 1.0, 1.0), RADIUS);
     let camera_position = -DVec3::X * RADIUS * 3.0;
 
-    let (earth_cell, earth_translation) = space.translation_to_grid(earth.position);
-    let (camera_cell, camera_translation) = space.translation_to_grid(camera_position);
+    commands.spawn_big_space(ReferenceFrame::default(), |root| {
+        let frame = root.frame().clone();
 
-    commands.spawn((
-        earth,
-        earth_cell,
-        PbrBundle {
-            transform: Transform::from_translation(earth_translation),
-            mesh: meshes.add(Sphere::new(RADIUS as f32 * 0.4).mesh().ico(20).unwrap()),
-            visibility: Visibility::Hidden,
-            ..default()
-        },
-    ));
+        let (earth_cell, earth_translation) = frame.translation_to_grid(earth.position);
+        let (camera_cell, camera_translation) = frame.translation_to_grid(camera_position);
 
-    commands.spawn(DebugCameraBundle {
-        camera: Camera3dBundle {
-            transform: Transform::from_translation(camera_translation).looking_to(Vec3::X, Vec3::Y),
-            projection: PerspectiveProjection {
-                near: 0.001,
+        root
+            .spawn_spatial((
+            earth,
+            earth_cell,
+            PbrBundle {
+                transform: Transform::from_translation(earth_translation),
+                mesh: meshes.add(Sphere::new(RADIUS as f32 * 0.4).mesh().ico(20).unwrap()),
+                visibility: Visibility::Hidden,
                 ..default()
-            }
-            .into(),
+            },
+        ));
+
+        root
+            .spawn_spatial(DebugCameraBundle {
+            camera: Camera3dBundle {
+                transform: Transform::from_translation(camera_translation)
+                    .looking_to(Vec3::X, Vec3::Y),
+                projection: PerspectiveProjection {
+                    near: 0.001,
+                    ..default()
+                }
+                .into(),
+                ..default()
+            },
+            cell: camera_cell,
+            controller: DebugCameraController {
+                translation_speed: RADIUS,
+                ..default()
+            },
             ..default()
-        },
-        cell: camera_cell,
-        controller: DebugCameraController {
-            translation_speed: RADIUS,
-            ..default()
-        },
-        ..default()
+        });
     });
 }
 
@@ -87,9 +96,9 @@ fn update(
     mut hide_origin: Local<bool>,
     mut gizmos: Gizmos,
     earth_query: Query<(&Earth, GridTransformReadOnly)>,
-    camera_query: Query<GridTransformReadOnly, With<Camera>>,
+    camera_query: Query<(Entity, GridTransformReadOnly), With<Camera>>,
     input: Res<ButtonInput<KeyCode>>,
-    frame: Res<RootReferenceFrame>,
+    frames: ReferenceFrames,
 ) {
     if input.just_pressed(KeyCode::KeyF) {
         *freeze = !*freeze;
@@ -101,9 +110,13 @@ fn update(
         *hide_origin = !*hide_origin;
     }
 
-    if !*freeze {
-        *camera_position = camera_query.single().position_double(&frame);
+    if *freeze {
+        return;
     }
+
+    let (camera, transform) = camera_query.single();
+    let frame = frames.parent_frame(camera).unwrap();
+    *camera_position = transform.position_double(&frame);
 
     let (&earth, earth_grid_transform) = earth_query.single();
     let earth_position = earth_grid_transform.position_double(&frame);
@@ -140,24 +153,24 @@ fn update(
 
         // dbg!(error);
 
-        draw_tile(&mut gizmos, &earth, tile, Color::RED, offset);
+        draw_tile(&mut gizmos, &earth, tile, basic::RED.into(), offset);
 
         gizmos.sphere(
             (position + offset).as_vec3(),
             Quat::IDENTITY,
             0.0001 * earth.radius as f32,
-            Color::GREEN,
+            basic::GREEN,
         );
         gizmos.sphere(
             (approximate_position + offset).as_vec3(),
             Quat::IDENTITY,
             0.0001 * earth.radius as f32,
-            Color::RED,
+            basic::RED,
         );
         gizmos.arrow(
             (position + offset).as_vec3(),
             (approximate_position + offset).as_vec3(),
-            Color::RED,
+            basic::RED,
         );
     }
 }

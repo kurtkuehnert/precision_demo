@@ -1,3 +1,4 @@
+use bevy::color::palettes::basic;
 use bevy::math::DVec3;
 use bevy::{
     math::{DVec2, IVec2, Quat, Vec2},
@@ -86,32 +87,32 @@ pub(crate) fn draw_origin(gizmos: &mut Gizmos, camera: &CameraParameter, offset:
             origin_position.as_vec3(),
             Quat::IDENTITY,
             0.0001 * earth.radius as f32,
-            Color::GOLD,
+            basic::OLIVE,
         );
         gizmos.arrow(
             origin_position.as_vec3(),
             origin_position.as_vec3() + c_s * DEBUG_SCALE,
-            Color::YELLOW,
+            basic::YELLOW,
         );
         gizmos.arrow(
             origin_position.as_vec3(),
             origin_position.as_vec3() + c_t * DEBUG_SCALE,
-            Color::GREEN,
+            basic::GREEN,
         );
         gizmos.arrow(
             origin_position.as_vec3(),
             origin_position.as_vec3() + c_ss * DEBUG_SCALE,
-            Color::RED,
+            basic::RED,
         );
         gizmos.arrow(
             origin_position.as_vec3(),
             origin_position.as_vec3() + c_st * DEBUG_SCALE,
-            Color::BLUE,
+            basic::BLUE,
         );
         gizmos.arrow(
             origin_position.as_vec3(),
             origin_position.as_vec3() + c_tt * DEBUG_SCALE,
-            Color::VIOLET,
+            basic::FUCHSIA,
         );
 
         for (start, end) in [(0, 0), (0, 1), (1, 1), (1, 0), (0, 0)]
@@ -153,7 +154,7 @@ pub(crate) fn draw_error_field(gizmos: &mut Gizmos, camera: &CameraParameter, of
         gizmos.arrow(
             (position + offset).as_vec3(),
             (position + offset).as_vec3() + error.as_vec3() * ERROR_SCALE,
-            Color::RED,
+            basic::RED,
         );
     }
 }

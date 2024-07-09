@@ -1,8 +1,8 @@
 //! This is a modified version of the big_space (https://github.com/aevyrie/big_space) camera controller.
 
-use crate::big_space::{FloatingOrigin, GridCell, GridTransform, RootReferenceFrame};
+use crate::big_space::{FloatingOrigin, GridCell, GridTransform, ReferenceFrame, ReferenceFrames};
 
-use bevy::{input::mouse::MouseMotion, math::DVec3, prelude::*, transform::TransformSystem};
+use bevy::{input::mouse::MouseMotion, math::DVec3, prelude::*};
 
 #[derive(Bundle)]
 pub struct DebugCameraBundle {
@@ -19,6 +19,30 @@ impl Default for DebugCameraBundle {
             controller: default(),
             cell: default(),
             origin: FloatingOrigin,
+        }
+    }
+}
+
+impl DebugCameraBundle {
+    pub fn new(position: DVec3, speed: f64, frame: &ReferenceFrame) -> Self {
+        let (cell, translation) = frame.translation_to_grid(position);
+
+        Self {
+            camera: Camera3dBundle {
+                transform: Transform::from_translation(translation).looking_to(Vec3::X, Vec3::Y),
+                projection: PerspectiveProjection {
+                    near: 0.000001,
+                    ..default()
+                }
+                .into(),
+                ..default()
+            },
+            cell,
+            controller: DebugCameraController {
+                translation_speed: speed,
+                ..default()
+            },
+            ..default()
         }
     }
 }
@@ -43,7 +67,7 @@ impl Default for DebugCameraController {
             enabled: false,
             translational_smoothness: 0.9,
             rotational_smoothness: 0.8,
-            translation_speed: 10e6,
+            translation_speed: 10e1,
             rotation_speed: 1e-1,
             acceleration_speed: 4.0,
             translation_velocity: Default::default(),
@@ -52,25 +76,16 @@ impl Default for DebugCameraController {
     }
 }
 
-pub struct DebugPlugin;
-
-impl Plugin for DebugPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(
-            PostUpdate,
-            camera_controller.before(TransformSystem::TransformPropagate),
-        );
-    }
-}
-
 pub fn camera_controller(
-    frame: Res<RootReferenceFrame>,
+    frames: ReferenceFrames,
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut mouse_move: EventReader<MouseMotion>,
-    mut camera: Query<(GridTransform, &mut DebugCameraController)>,
+    mut camera: Query<(Entity, GridTransform, &mut DebugCameraController)>,
 ) {
-    let (mut position, mut controller) = camera.single_mut();
+    let (camera, mut position, mut controller) = camera.single_mut();
+
+    let frame = frames.parent_frame(camera).unwrap();
 
     keyboard
         .just_pressed(KeyCode::KeyT)
@@ -133,4 +148,15 @@ pub fn camera_controller(
     *position.cell += cell_delta;
     position.transform.translation += translation_delta;
     position.transform.rotation = Quat::from_euler(EulerRot::YXZ, new_yaw, new_pitch, 0.0);
+}
+
+pub struct DebugPlugin;
+
+impl Plugin for DebugPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            PostUpdate,
+            camera_controller.before(TransformSystem::TransformPropagate),
+        );
+    }
 }
