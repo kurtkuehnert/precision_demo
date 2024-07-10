@@ -7,4 +7,4 @@ edition = "2021"
 bevy = "0.14"
 itertools = "0.13"
 big_space = "0.7"
-
+rand = "0.8.5"

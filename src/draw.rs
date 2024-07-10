@@ -6,14 +6,14 @@ use bevy::{
 };
 use itertools::{iproduct, Itertools};
 
-use crate::math::{CameraParameter, Coordinate, Earth, SideParameter, Tile};
+use crate::math::{Coordinate, SideParameter, TerrainModel, TerrainModelApproximation, Tile};
 
 const DEBUG_SCALE: f32 = 1.0 / (1 << 5) as f32;
 const ERROR_SCALE: f32 = 4.0;
 
-pub(crate) fn draw_tile(
+pub fn draw_tile(
     gizmos: &mut Gizmos,
-    earth: &Earth,
+    model: &TerrainModel,
     tile: Tile,
     color: Color,
     offset: DVec3,
@@ -24,25 +24,26 @@ pub(crate) fn draw_tile(
         .into_iter()
         .map(|(x, y)| {
             let corner_st = IVec2::new(tile.xy.x + x, tile.xy.y + y).as_dvec2() * size;
-            let local_position = Coordinate::new(tile.side, corner_st).to_local_position();
-            earth.local_to_world(local_position)
+            Coordinate::new(tile.side, corner_st).world_position(model, 0.0)
         })
         .tuple_windows()
     {
-        gizmos.short_arc_3d_between(
-            (earth.position + offset).as_vec3(),
-            (start + offset).as_vec3(),
-            (end + offset).as_vec3(),
-            color,
-        );
+        gizmos
+            .short_arc_3d_between(
+                (model.position + offset).as_vec3(),
+                (start + offset).as_vec3(),
+                (end + offset).as_vec3(),
+                color,
+            )
+            .resolution(20);
     }
 }
 
-pub(crate) fn draw_earth(gizmos: &mut Gizmos, earth: &Earth, lod: i32, offset: DVec3) {
+pub fn draw_earth(gizmos: &mut Gizmos, model: &TerrainModel, lod: i32, offset: DVec3) {
     for (side, x, y) in iproduct!(0..6, 0..1 << lod, 0..1 << lod) {
         draw_tile(
             gizmos,
-            earth,
+            model,
             Tile::new(side, lod, x, y),
             Color::BLACK,
             offset,
@@ -50,8 +51,8 @@ pub(crate) fn draw_earth(gizmos: &mut Gizmos, earth: &Earth, lod: i32, offset: D
     }
 }
 
-pub(crate) fn draw_origin(gizmos: &mut Gizmos, camera: &CameraParameter, offset: DVec3) {
-    let earth = camera.earth;
+pub fn draw_origin(gizmos: &mut Gizmos, approximation: &TerrainModelApproximation, offset: DVec3) {
+    let model = approximation.model.clone();
 
     for (
         side,
@@ -65,11 +66,12 @@ pub(crate) fn draw_origin(gizmos: &mut Gizmos, camera: &CameraParameter, offset:
             c_ss,
             c_st,
             c_tt,
+            ..
         },
-    ) in camera.sides.iter().enumerate()
+    ) in approximation.sides.iter().enumerate()
     {
-        let local_position = Coordinate::new(side as u32, origin_st).to_local_position();
-        let origin_position = earth.local_to_world(local_position) + offset;
+        let origin_position =
+            Coordinate::new(side as u32, origin_st).world_position(&model, 0.0) + offset;
 
         // if side as u32 == camera.coordinate.side {
         //     println!(
@@ -86,7 +88,7 @@ pub(crate) fn draw_origin(gizmos: &mut Gizmos, camera: &CameraParameter, offset:
         gizmos.sphere(
             origin_position.as_vec3(),
             Quat::IDENTITY,
-            0.0001 * earth.radius as f32,
+            0.0001 * model.scale() as f32,
             basic::OLIVE,
         );
         gizmos.arrow(
@@ -121,13 +123,12 @@ pub(crate) fn draw_origin(gizmos: &mut Gizmos, camera: &CameraParameter, offset:
                 let corner_st = (origin_st
                     + DVec2::new(2.0 * x as f64 - 1.0, 2.0 * y as f64 - 1.0) * DEBUG_SCALE as f64)
                     .clamp(DVec2::splat(0.0), DVec2::splat(1.0));
-                let local_position = Coordinate::new(side as u32, corner_st).to_local_position();
-                earth.local_to_world(local_position)
+                Coordinate::new(side as u32, corner_st).world_position(&model, 0.0)
             })
             .tuple_windows()
         {
             gizmos.short_arc_3d_between(
-                (earth.position + offset).as_vec3(),
+                (model.position + offset).as_vec3(),
                 (start + offset).as_vec3(),
                 (end + offset).as_vec3(),
                 Color::WHITE,
@@ -136,16 +137,21 @@ pub(crate) fn draw_origin(gizmos: &mut Gizmos, camera: &CameraParameter, offset:
     }
 }
 
-pub(crate) fn draw_error_field(gizmos: &mut Gizmos, camera: &CameraParameter, offset: DVec3) {
+pub fn draw_error_field(
+    gizmos: &mut Gizmos,
+    approximation: &TerrainModelApproximation,
+    offset: DVec3,
+) {
     let count = 16;
-    let side = camera.coordinate.side;
+    let side = approximation.view_coordinate.side;
 
     for (x, y) in iproduct!(-count..=count, -count..=count) {
         let relative_st = Vec2::new(x as f32, y as f32) / count as f32 * DEBUG_SCALE;
 
-        let position = camera.position + camera.relative_position(relative_st, side);
-        let approximate_position = camera.position
-            + camera
+        let position =
+            approximation.view_position + approximation.relative_position(relative_st, side);
+        let approximate_position = approximation.view_position
+            + approximation
                 .approximate_relative_position(relative_st, side)
                 .as_dvec3();
 

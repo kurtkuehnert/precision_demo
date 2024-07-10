@@ -1,4 +1,4 @@
-pub use big_space::FloatingOrigin;
+pub use big_space::{BigSpaceCommands, FloatingOrigin};
 
 pub type GridPrecision = i32;
 

@@ -1,24 +1,16 @@
 #![allow(dead_code, unused_variables)]
 
-use crate::big_space::{BigSpacePlugin, ReferenceFrame, ReferenceFrames};
-use crate::camera::DebugCameraController;
-use crate::draw::{draw_earth, draw_error_field, draw_origin, draw_tile};
-use crate::{
-    big_space::GridTransformReadOnly,
-    camera::{DebugCameraBundle, DebugPlugin},
-    math::{CameraParameter, Earth, Tile},
+use bevy::{color::palettes::basic, math::DVec3, prelude::*, window::Cursor};
+use precision_demo::{
+    big_space::{
+        BigSpaceCommands, BigSpacePlugin, GridTransformReadOnly, ReferenceFrame, ReferenceFrames,
+    },
+    camera::{DebugCameraBundle, DebugCameraController, DebugPlugin},
+    draw::{draw_earth, draw_error_field, draw_origin, draw_tile},
+    math::{TerrainModel, TerrainModelApproximation, Tile},
 };
-use ::big_space::BigSpaceCommands;
-use bevy::color::palettes::basic;
-use bevy::window::Cursor;
-use bevy::{math::DVec3, prelude::*};
 
-mod big_space;
-mod camera;
-mod draw;
-mod math;
-
-const RADIUS: f64 = 1.0; // 6371000.0;
+const RADIUS: f64 = 6371000.0;
 const ORIGIN_LOD: i32 = 8;
 
 fn main() {
@@ -46,18 +38,17 @@ fn main() {
 }
 
 fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
-    let earth = Earth::new(DVec3::new(0.0, 1.0, 1.0), RADIUS);
+    let model = TerrainModel::new(DVec3::new(0.0, 1.0, 1.0), 6378137.0, 6356752.314245);
     let camera_position = -DVec3::X * RADIUS * 3.0;
 
     commands.spawn_big_space(ReferenceFrame::default(), |root| {
         let frame = root.frame().clone();
 
-        let (earth_cell, earth_translation) = frame.translation_to_grid(earth.position);
+        let (earth_cell, earth_translation) = frame.translation_to_grid(model.position);
         let (camera_cell, camera_translation) = frame.translation_to_grid(camera_position);
 
-        root
-            .spawn_spatial((
-            earth,
+        root.spawn_spatial((
+            model,
             earth_cell,
             PbrBundle {
                 transform: Transform::from_translation(earth_translation),
@@ -67,8 +58,7 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
             },
         ));
 
-        root
-            .spawn_spatial(DebugCameraBundle {
+        root.spawn_spatial(DebugCameraBundle {
             camera: Camera3dBundle {
                 transform: Transform::from_translation(camera_translation)
                     .looking_to(Vec3::X, Vec3::Y),
@@ -90,13 +80,13 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
 }
 
 fn update(
-    mut camera_position: Local<DVec3>,
+    mut view_position: Local<DVec3>,
     mut freeze: Local<bool>,
     mut show_error: Local<bool>,
     mut hide_origin: Local<bool>,
     mut gizmos: Gizmos,
-    earth_query: Query<(&Earth, GridTransformReadOnly)>,
-    camera_query: Query<(Entity, GridTransformReadOnly), With<Camera>>,
+    terrain_query: Query<(&TerrainModel, GridTransformReadOnly)>,
+    view_query: Query<(Entity, GridTransformReadOnly), With<Camera>>,
     input: Res<ButtonInput<KeyCode>>,
     frames: ReferenceFrames,
 ) {
@@ -114,57 +104,59 @@ fn update(
         return;
     }
 
-    let (camera, transform) = camera_query.single();
-    let frame = frames.parent_frame(camera).unwrap();
-    *camera_position = transform.position_double(&frame);
+    let (view, transform) = view_query.single();
+    let frame = frames.parent_frame(view).unwrap();
+    *view_position = transform.position_double(&frame);
 
-    let (&earth, earth_grid_transform) = earth_query.single();
-    let earth_position = earth_grid_transform.position_double(&frame);
-    let offset = earth_position - *camera_position;
+    let (model, terrain_grid_transform) = terrain_query.single();
+    let terrain_position = terrain_grid_transform.position_double(&frame);
+    let offset = terrain_position - *view_position;
 
     dbg!(offset);
 
-    let camera = CameraParameter::compute(*camera_position, earth, ORIGIN_LOD);
+    let approximation =
+        TerrainModelApproximation::compute(model.clone(), *view_position, ORIGIN_LOD);
 
-    draw_earth(&mut gizmos, &earth, 2, offset);
+    draw_earth(&mut gizmos, &model, 2, offset);
 
     if !*hide_origin {
-        draw_origin(&mut gizmos, &camera, offset);
+        draw_origin(&mut gizmos, &approximation, offset);
     }
     if *show_error {
-        draw_error_field(&mut gizmos, &camera, offset);
+        draw_error_field(&mut gizmos, &approximation, offset);
     }
 
     {
-        let xy = (Vec2::new(0.2483, 0.688143) * (1 << camera.origin_lod) as f32).as_ivec2();
-        let tile = Tile::new(0, camera.origin_lod, xy.x, xy.y);
+        let xy = (Vec2::new(0.2483, 0.688143) * (1 << approximation.origin_lod) as f32).as_ivec2();
+        let tile = Tile::new(0, approximation.origin_lod, xy.x, xy.y);
         let vertex_offset = Vec2::new(0.3754, 0.815768);
 
-        let relative_st = camera.relative_st(tile, vertex_offset);
-        let relative_position = camera.relative_position(relative_st, tile.side);
-        let approximate_relative_st = camera.approximate_relative_st(tile, vertex_offset);
+        let relative_st = approximation.relative_st(tile, vertex_offset);
+        let relative_position = approximation.relative_position(relative_st, tile.side);
+        let approximate_relative_st = approximation.approximate_relative_st(tile, vertex_offset);
         let approximate_relative_position =
-            camera.approximate_relative_position(approximate_relative_st, tile.side);
+            approximation.approximate_relative_position(approximate_relative_st, tile.side);
 
-        let position = camera.position + relative_position;
-        let approximate_position = camera.position + approximate_relative_position.as_dvec3();
+        let position = approximation.view_position + relative_position;
+        let approximate_position =
+            approximation.view_position + approximate_relative_position.as_dvec3();
 
         let error = position - approximate_position;
 
         // dbg!(error);
 
-        draw_tile(&mut gizmos, &earth, tile, basic::RED.into(), offset);
+        draw_tile(&mut gizmos, &model, tile, basic::RED.into(), offset);
 
         gizmos.sphere(
             (position + offset).as_vec3(),
             Quat::IDENTITY,
-            0.0001 * earth.radius as f32,
+            0.0001 * model.scale() as f32,
             basic::GREEN,
         );
         gizmos.sphere(
             (approximate_position + offset).as_vec3(),
             Quat::IDENTITY,
-            0.0001 * earth.radius as f32,
+            0.0001 * model.scale() as f32,
             basic::RED,
         );
         gizmos.arrow(
