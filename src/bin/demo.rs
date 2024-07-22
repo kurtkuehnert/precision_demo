@@ -1,81 +1,57 @@
 #![allow(dead_code, unused_variables)]
 
-use bevy::{color::palettes::basic, math::DVec3, prelude::*, window::Cursor};
-use precision_demo::{
-    big_space::{
-        BigSpaceCommands, BigSpacePlugin, GridTransformReadOnly, ReferenceFrame, ReferenceFrames,
-    },
-    camera::{DebugCameraBundle, DebugCameraController, DebugPlugin},
-    draw::{draw_earth, draw_error_field, draw_origin, draw_tile},
-    math::{TerrainModel, TerrainModelApproximation, Tile},
+use bevy::{math::DVec3, prelude::*};
+use bevy_terrain::{
+    big_space::{GridTransformReadOnly, ReferenceFrames},
+    math::{Coordinate, SurfaceApproximation},
+    prelude::*,
 };
+use itertools::Itertools;
+use precision_demo::draw::{draw_approximation, draw_earth};
 
 const RADIUS: f64 = 6371000.0;
 const ORIGIN_LOD: i32 = 8;
 
+#[derive(Component)]
+struct Model(TerrainModel);
+
 fn main() {
     App::new()
         .add_plugins((
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        cursor: Cursor {
-                            visible: false,
-                            ..default()
-                        },
-                        ..default()
-                    }),
-                    ..default()
-                })
-                .build()
-                .disable::<TransformPlugin>(),
-            BigSpacePlugin::default(),
-            DebugPlugin,
+            DefaultPlugins.build().disable::<TransformPlugin>(),
+            TerrainPlugin,
+            TerrainDebugPlugin,
         ))
         .add_systems(Startup, setup)
         .add_systems(Update, update)
         .run();
 }
 
-fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
-    let model = TerrainModel::new(DVec3::new(0.0, 1.0, 1.0), 6378137.0, 6356752.314245);
-    let camera_position = -DVec3::X * RADIUS * 3.0;
+fn setup(mut commands: Commands) {
+    let model = TerrainModel::ellipsoid(
+        DVec3::new(0.0, 1.0, 1.0),
+        6378137.0,
+        6356752.314245,
+        0.0,
+        0.0,
+    );
 
     commands.spawn_big_space(ReferenceFrame::default(), |root| {
         let frame = root.frame().clone();
 
-        let (earth_cell, earth_translation) = frame.translation_to_grid(model.position);
-        let (camera_cell, camera_translation) = frame.translation_to_grid(camera_position);
+        let (earth_cell, earth_translation) = frame.translation_to_grid(model.position());
 
         root.spawn_spatial((
-            model,
+            Model(model),
             earth_cell,
-            PbrBundle {
-                transform: Transform::from_translation(earth_translation),
-                mesh: meshes.add(Sphere::new(RADIUS as f32 * 0.4).mesh().ico(20).unwrap()),
-                visibility: Visibility::Hidden,
-                ..default()
-            },
+            Transform::from_translation(earth_translation),
         ));
 
-        root.spawn_spatial(DebugCameraBundle {
-            camera: Camera3dBundle {
-                transform: Transform::from_translation(camera_translation)
-                    .looking_to(Vec3::X, Vec3::Y),
-                projection: PerspectiveProjection {
-                    near: 0.001,
-                    ..default()
-                }
-                .into(),
-                ..default()
-            },
-            cell: camera_cell,
-            controller: DebugCameraController {
-                translation_speed: RADIUS,
-                ..default()
-            },
-            ..default()
-        });
+        root.spawn_spatial(DebugCameraBundle::new(
+            -DVec3::X * RADIUS * 3.0,
+            RADIUS,
+            &frame,
+        ));
     });
 }
 
@@ -83,9 +59,9 @@ fn update(
     mut view_position: Local<DVec3>,
     mut freeze: Local<bool>,
     mut show_error: Local<bool>,
-    mut hide_origin: Local<bool>,
+    mut hide_approximation: Local<bool>,
     mut gizmos: Gizmos,
-    terrain_query: Query<(&TerrainModel, GridTransformReadOnly)>,
+    terrain_query: Query<(&Model, GridTransformReadOnly)>,
     view_query: Query<(Entity, GridTransformReadOnly), With<Camera>>,
     input: Res<ButtonInput<KeyCode>>,
     frames: ReferenceFrames,
@@ -97,7 +73,7 @@ fn update(
         *show_error = !*show_error;
     }
     if input.just_pressed(KeyCode::KeyO) {
-        *hide_origin = !*hide_origin;
+        *hide_approximation = !*hide_approximation;
     }
 
     if *freeze {
@@ -108,61 +84,32 @@ fn update(
     let frame = frames.parent_frame(view).unwrap();
     *view_position = transform.position_double(&frame);
 
-    let (model, terrain_grid_transform) = terrain_query.single();
+    let (Model(model), terrain_grid_transform) = terrain_query.single();
     let terrain_position = terrain_grid_transform.position_double(&frame);
     let offset = terrain_position - *view_position;
 
-    dbg!(offset);
+    let view_coordinate = Coordinate::from_world_position(*view_position, model);
 
-    let approximation =
-        TerrainModelApproximation::compute(model.clone(), *view_position, ORIGIN_LOD);
+    let view_coordinates = (0..6)
+        .map(|side| view_coordinate.project_to_side(side, model))
+        .collect_vec();
 
-    draw_earth(&mut gizmos, &model, 2, offset);
+    let approximations = view_coordinates
+        .iter()
+        .map(|&view_coordinate| {
+            SurfaceApproximation::compute(view_coordinate, *view_position, model)
+        })
+        .collect_vec();
 
-    if !*hide_origin {
-        draw_origin(&mut gizmos, &approximation, offset);
-    }
-    if *show_error {
-        draw_error_field(&mut gizmos, &approximation, offset);
-    }
+    draw_earth(&mut gizmos, model, 2, offset);
 
-    {
-        let xy = (Vec2::new(0.2483, 0.688143) * (1 << approximation.origin_lod) as f32).as_ivec2();
-        let tile = Tile::new(0, approximation.origin_lod, xy.x, xy.y);
-        let vertex_offset = Vec2::new(0.3754, 0.815768);
-
-        let relative_st = approximation.relative_st(tile, vertex_offset);
-        let relative_position = approximation.relative_position(relative_st, tile.side);
-        let approximate_relative_st = approximation.approximate_relative_st(tile, vertex_offset);
-        let approximate_relative_position =
-            approximation.approximate_relative_position(approximate_relative_st, tile.side);
-
-        let position = approximation.view_position + relative_position;
-        let approximate_position =
-            approximation.view_position + approximate_relative_position.as_dvec3();
-
-        let error = position - approximate_position;
-
-        // dbg!(error);
-
-        draw_tile(&mut gizmos, &model, tile, basic::RED.into(), offset);
-
-        gizmos.sphere(
-            (position + offset).as_vec3(),
-            Quat::IDENTITY,
-            0.0001 * model.scale() as f32,
-            basic::GREEN,
-        );
-        gizmos.sphere(
-            (approximate_position + offset).as_vec3(),
-            Quat::IDENTITY,
-            0.0001 * model.scale() as f32,
-            basic::RED,
-        );
-        gizmos.arrow(
-            (position + offset).as_vec3(),
-            (approximate_position + offset).as_vec3(),
-            basic::RED,
+    if !*hide_approximation {
+        draw_approximation(
+            &mut gizmos,
+            model,
+            &view_coordinates,
+            &approximations,
+            offset,
         );
     }
 }
