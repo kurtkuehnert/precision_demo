@@ -26,7 +26,7 @@ pub fn draw_tile(
         .into_iter()
         .map(|(x, y)| {
             let corner_st = UVec2::new(tile.x + x, tile.y + y).as_dvec2() * size;
-            Coordinate::new(tile.side, corner_st).world_position(model, 0.0)
+            Coordinate::new(tile.face, corner_st).world_position(model, 0.0)
         })
         .tuple_windows()
     {
@@ -42,11 +42,11 @@ pub fn draw_tile(
 }
 
 pub fn draw_earth(gizmos: &mut Gizmos, model: &TerrainModel, lod: u32, offset: DVec3) {
-    for (side, x, y) in iproduct!(0..6, 0..1 << lod, 0..1 << lod) {
+    for (face, x, y) in iproduct!(0..6, 0..1 << lod, 0..1 << lod) {
         draw_tile(
             gizmos,
             model,
-            TileCoordinate::new(side, lod, x, y),
+            TileCoordinate::new(face, lod, x, y),
             Color::BLACK,
             offset,
         )
@@ -60,7 +60,7 @@ pub fn draw_approximation(
     approximations: &[SurfaceApproximation],
     offset: DVec3,
 ) {
-    for side in 0..model.side_count() {
+    for face in 0..model.face_count() {
         let &SurfaceApproximation {
             c,
             c_du,
@@ -68,9 +68,9 @@ pub fn draw_approximation(
             c_duu,
             c_duv,
             c_dvv,
-        } = &approximations[side as usize];
+        } = &approximations[face as usize];
 
-        let view_coordinate = view_coordinates[side as usize];
+        let view_coordinate = view_coordinates[face as usize];
         let view_position = view_coordinate.world_position(&model, 0.0) + offset;
 
         gizmos.sphere(
@@ -111,7 +111,7 @@ pub fn draw_approximation(
                 let corner_uv = (view_coordinate.uv
                     + DVec2::new(2.0 * x as f64 - 1.0, 2.0 * y as f64 - 1.0) * DEBUG_SCALE as f64)
                     .clamp(DVec2::splat(0.0), DVec2::splat(1.0));
-                Coordinate::new(side as u32, corner_uv).world_position(&model, 0.0)
+                Coordinate::new(face as u32, corner_uv).world_position(&model, 0.0)
             })
             .tuple_windows()
         {

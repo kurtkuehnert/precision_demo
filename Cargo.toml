@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 bevy = "0.14"
-bevy_terrain = { path = "../bevy_terrain", features = ["high_precision"] }
+bevy_terrain = { git = "https://github.com/kurtkuehnert/bevy_terrain", features = ["high_precision"], branch = "development", commit = "999d1e9a" }
 itertools = "0.13"
 big_space = "0.7"
 rand = "0.8.5"

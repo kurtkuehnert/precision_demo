@@ -91,7 +91,7 @@ fn update(
     let view_coordinate = Coordinate::from_world_position(*view_position, model);
 
     let view_coordinates = (0..6)
-        .map(|side| view_coordinate.project_to_side(side, model))
+        .map(|face| view_coordinate.project_to_face(face, model))
         .collect_vec();
 
     let approximations = view_coordinates

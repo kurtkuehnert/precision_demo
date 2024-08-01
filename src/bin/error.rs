@@ -20,7 +20,7 @@ fn f32_world_position((tile, tile_uv): (TileCoordinate, Vec2), model: &TerrainMo
     let w = (uv - 0.5) / 0.5;
     let uv = w / (1.0 + C_SQR - C_SQR * w * w).powf(0.5);
 
-    let local_position = match tile.side {
+    let local_position = match tile.face {
         0 => Vec3::new(-1.0, -uv.y, uv.x),
         1 => Vec3::new(uv.x, -uv.y, 1.0),
         2 => Vec3::new(uv.x, 1.0, uv.y),
@@ -49,7 +49,7 @@ fn approximate_world_position(
     let ViewCoordinate {
         xy: view_xy,
         uv: view_uv,
-    } = ViewCoordinate::new(view_coordinates[tile.side as usize], origin_lod);
+    } = ViewCoordinate::new(view_coordinates[tile.face as usize], origin_lod);
 
     let &SurfaceApproximation {
         c,
@@ -58,7 +58,7 @@ fn approximate_world_position(
         c_duu,
         c_duv,
         c_dvv,
-    } = &approximations[tile.side as usize];
+    } = &approximations[tile.face as usize];
 
     let Vec2 { x: u, y: v } = ((tile.xy() - view_xy).as_vec2() + tile_uv - view_uv)
         / TileCoordinate::count(tile.lod) as f32;
@@ -113,7 +113,7 @@ fn tile_coordinate_from_world_position(
     let tile_uv = uv.fract().as_vec2();
 
     (
-        TileCoordinate::new(coordinate.side, lod, tile_xy.x, tile_xy.y),
+        TileCoordinate::new(coordinate.face, lod, tile_xy.x, tile_xy.y),
         tile_uv,
     )
 }
@@ -135,7 +135,7 @@ fn compute_errors() -> Errors {
 
     let model = TerrainModel::ellipsoid(DVec3::ZERO, 6378137.0, 6356752.314245, 0.0, 0.0);
 
-    let view_samples = 10000;
+    let view_samples = 100000;
     let surface_samples = 100;
     let view_lod = 10;
     let threshold = 0.001 * model.scale();
@@ -160,7 +160,7 @@ fn compute_errors() -> Errors {
         let view_coordinate = Coordinate::from_world_position(view_position, &model);
 
         let view_coordinates = (0..6)
-            .map(|side| view_coordinate.project_to_side(side, &model))
+            .map(|face| view_coordinate.project_to_face(face))
             .collect_vec();
 
         let approximations = view_coordinates
